@@ -19,7 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests pandas ta-lib-python colorama
+        run: pip install requests pandas ta colorama
 
       - name: Run BTC analyzer and send email
         env:
