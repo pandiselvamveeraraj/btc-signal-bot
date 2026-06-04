@@ -1,0 +1,29 @@
+name: BTC Options Signal — Hourly Email
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # runs at the top of every hour, 24/7
+  workflow_dispatch:        # lets you trigger it manually from GitHub too
+
+jobs:
+  send-signal:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pandas ta-lib-python colorama
+
+      - name: Run BTC analyzer and send email
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
+          TO_EMAIL:   ${{ secrets.TO_EMAIL }}
+        run: python btc_analyzer.py
