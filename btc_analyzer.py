@@ -1,6 +1,7 @@
 """
 BTC Options Analyzer — Email Edition
 Runs every 1 hour via GitHub Actions and sends signal to your email.
+Uses KuCoin API (works from all regions including GitHub Actions US servers).
 """
 
 import requests
@@ -14,25 +15,26 @@ from datetime import datetime
 
 
 # ── CONFIG (set these in GitHub Secrets) ─────────────────────────────────────
-GMAIL_USER   = os.environ["GMAIL_USER"]      # your Gmail address
-GMAIL_PASS   = os.environ["GMAIL_PASS"]      # Gmail App Password
-TO_EMAIL     = os.environ["TO_EMAIL"]        # where to send (can be same Gmail)
+GMAIL_USER   = os.environ["GMAIL_USER"]
+GMAIL_PASS   = os.environ["GMAIL_PASS"]
+TO_EMAIL     = os.environ["TO_EMAIL"]
 
-SYMBOL       = "BTCUSDT"
-INTERVAL     = "1h"
+SYMBOL       = "BTC-USDT"   # KuCoin format
+INTERVAL     = "1hour"      # KuCoin interval
 LIMIT        = 200
 
 
-# ── FETCH DATA ────────────────────────────────────────────────────────────────
+# ── FETCH DATA (KuCoin — no region restrictions) ──────────────────────────────
 def fetch_ohlcv():
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": SYMBOL, "interval": INTERVAL, "limit": LIMIT}
+    url = "https://api.kucoin.com/api/v1/market/candles"
+    params = {"symbol": SYMBOL, "type": INTERVAL}
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
-    df = pd.DataFrame(r.json(), columns=[
-        "open_time","open","high","low","close","volume",
-        "close_time","qav","trades","tbbav","tbqav","ignore"
-    ])
+    raw = r.json()["data"]        # KuCoin returns newest first
+    raw = list(reversed(raw))     # flip to oldest first
+    raw = raw[-LIMIT:]            # keep last 200
+    # KuCoin columns: time, open, close, high, low, volume, turnover
+    df = pd.DataFrame(raw, columns=["open_time","open","close","high","low","volume","turnover"])
     for col in ["open","high","low","close","volume"]:
         df[col] = df[col].astype(float)
     return df
@@ -96,8 +98,8 @@ def analyze(df):
     elif price >= last["bb_upper"]:
         put_score += 2;  reasons.append(("🔴", "Price at upper Bollinger Band → Put setup", "put"))
 
-    atr_pct = (last["atr"] / price) * 100
-    atm     = round(price / 100) * 100
+    atr_pct  = (last["atr"] / price) * 100
+    atm      = round(price / 100) * 100
     atr_step = round(last["atr"] * 1.5 / 100) * 100
 
     return {
@@ -125,15 +127,15 @@ def build_email(d):
     strength = "Strong" if gap >= 4 else "Moderate" if gap >= 2 else "Weak"
 
     if call_score > put_score:
-        verdict_text  = f"🟢 BUY CALL — {strength} Signal"
+        verdict_text  = f"BUY CALL — {strength} Signal"
         verdict_color = "#1d9e75"
         verdict_bg    = "#eaf3de"
     elif put_score > call_score:
-        verdict_text  = f"🔴 BUY PUT — {strength} Signal"
+        verdict_text  = f"BUY PUT — {strength} Signal"
         verdict_color = "#a32d2d"
         verdict_bg    = "#fcebeb"
     else:
-        verdict_text  = "🟡 No Clear Signal — Wait"
+        verdict_text  = "No Clear Signal — Wait"
         verdict_color = "#854f0b"
         verdict_bg    = "#faeeda"
 
@@ -155,26 +157,20 @@ def build_email(d):
 <body style="margin:0;padding:0;background:#f5f5f3;font-family:Arial,sans-serif;">
   <div style="max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e0dfd8;">
 
-    <!-- Header -->
-    <div style="background:#1a1a1a;padding:20px 24px;display:flex;align-items:center;justify-content:space-between;">
-      <div>
-        <div style="color:#fff;font-size:20px;font-weight:600;">₿ BTC Options Signal</div>
-        <div style="color:#888;font-size:12px;margin-top:2px;">{now}</div>
-      </div>
-      <div style="text-align:right;">
-        <div style="color:#fff;font-size:22px;font-weight:600;">${d['price']:,.0f}</div>
-        <div style="color:#888;font-size:11px;">BTCUSDT · 1H</div>
-      </div>
+    <div style="background:#1a1a1a;padding:20px 24px;">
+      <div style="color:#fff;font-size:20px;font-weight:600;">BTC Options Signal</div>
+      <div style="color:#888;font-size:12px;margin-top:2px;">{now} &nbsp;·&nbsp; KuCoin · 1H</div>
     </div>
 
-    <!-- Verdict Banner -->
     <div style="background:{verdict_bg};padding:18px 24px;border-bottom:1px solid #e0dfd8;">
-      <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Options Signal</div>
-      <div style="font-size:22px;font-weight:700;color:{verdict_color};">{verdict_text}</div>
-      <div style="font-size:12px;color:#888;margin-top:4px;">Score: Call {call_score} vs Put {put_score} &nbsp;·&nbsp; Expiry: 1–3 days</div>
+      <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Signal</div>
+      <div style="font-size:24px;font-weight:700;color:{verdict_color};">{verdict_text}</div>
+      <div style="font-size:13px;color:#666;margin-top:6px;">
+        BTC Price: <strong>${d['price']:,.0f}</strong> &nbsp;·&nbsp;
+        Call score: {call_score} &nbsp;·&nbsp; Put score: {put_score} &nbsp;·&nbsp; Expiry: 1–3 days
+      </div>
     </div>
 
-    <!-- Metrics -->
     <div style="padding:16px 24px;display:flex;gap:12px;border-bottom:1px solid #e0dfd8;flex-wrap:wrap;">
       <div style="flex:1;min-width:100px;background:#f5f5f3;border-radius:8px;padding:10px 14px;">
         <div style="font-size:11px;color:#888;margin-bottom:4px;">RSI (14)</div>
@@ -189,20 +185,16 @@ def build_email(d):
         <div style="font-size:18px;font-weight:600;color:#1a1a1a;">{d['atr_pct']:.2f}%</div>
       </div>
       <div style="flex:1;min-width:100px;background:#f5f5f3;border-radius:8px;padding:10px 14px;">
-        <div style="font-size:11px;color:#888;margin-bottom:4px;">EMA 20/50</div>
-        <div style="font-size:14px;font-weight:600;color:#1a1a1a;">${d['ema20']:,.0f} / ${d['ema50']:,.0f}</div>
+        <div style="font-size:11px;color:#888;margin-bottom:4px;">EMA 20 / 50</div>
+        <div style="font-size:13px;font-weight:600;color:#1a1a1a;">${d['ema20']:,.0f} / ${d['ema50']:,.0f}</div>
       </div>
     </div>
 
-    <!-- Signals -->
     <div style="padding:16px 24px;border-bottom:1px solid #e0dfd8;">
       <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Signal Breakdown</div>
-      <table style="width:100%;border-collapse:collapse;">
-        {reason_rows}
-      </table>
+      <table style="width:100%;border-collapse:collapse;">{reason_rows}</table>
     </div>
 
-    <!-- Strike Hints -->
     <div style="padding:16px 24px;border-bottom:1px solid #e0dfd8;">
       <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Strike Price Hints</div>
       <div style="display:flex;gap:10px;">
@@ -221,11 +213,9 @@ def build_email(d):
       </div>
     </div>
 
-    <!-- Footer -->
     <div style="padding:14px 24px;background:#f5f5f3;">
       <div style="font-size:11px;color:#aaa;text-align:center;">
-        This is automated analysis only — not financial advice.<br>
-        Options can expire worthless. Always manage your risk.
+        Automated analysis only — not financial advice. Options can expire worthless. Always manage risk.
       </div>
     </div>
 
@@ -242,20 +232,18 @@ def send_email(html_body, verdict_text, price):
     msg["Subject"] = f"BTC Signal: {verdict_text} | ${price:,.0f}"
     msg["From"]    = GMAIL_USER
     msg["To"]      = TO_EMAIL
-
     msg.attach(MIMEText(html_body, "html"))
-
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(GMAIL_USER, GMAIL_PASS)
         server.sendmail(GMAIL_USER, TO_EMAIL, msg.as_string())
-
-    print(f"✅ Email sent: {verdict_text} | ${price:,.0f}")
+    print(f"Email sent: {verdict_text} | ${price:,.0f}")
 
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
-    print("Fetching BTC data...")
+    print("Fetching BTC data from KuCoin...")
     df = fetch_ohlcv()
+    print(f"Got {len(df)} candles. Latest close: {df.iloc[-1]['close']}")
     df = add_indicators(df)
     result = analyze(df)
     html, verdict = build_email(result)
